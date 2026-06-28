@@ -101,18 +101,41 @@
   .cohcard .detail{font-size:.82rem;color:var(--muted);width:100%;margin-top:2px;cursor:pointer;
     text-decoration:underline;text-decoration-style:dotted}
 
-  /* loaded-calendar chips are now selectable when a single-cal function is active */
+  /* loaded-calendar chips */
   .chip{cursor:default}
   .chip.selectable{cursor:pointer}
   .chip.selected{background:var(--accent);color:#fff;border-color:var(--accent)}
   .chip.selected button{color:#fff}
   .chip .name{user-select:none}
-  /* per-calendar color index */
   .cdot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;margin-right:1px}
   .csrc{font-size:.78rem;display:inline-flex;align-items:center;gap:5px;
     padding:1px 8px 1px 6px;border-radius:20px;background:var(--accent-soft);white-space:nowrap}
   .item.lcal{border-left:3px solid var(--line)}
   .pickhint{font-size:.82rem;color:var(--muted);margin:2px 0 0}
+
+  /* stale-filter banner */
+  .hide-banner{background:#fff9e6;border:1px solid #dece7a;color:#6b5400;
+    padding:10px 14px;border-radius:8px;margin-bottom:12px;
+    display:flex;align-items:center;gap:8px;font-size:.88rem;flex-wrap:wrap}
+  .hide-banner a{color:var(--accent)}
+  .hb-x{background:none;border:none;cursor:pointer;font-size:1.1rem;
+    margin-left:auto;color:var(--muted);padding:0;line-height:1}
+
+  /* worklist */
+  .wl-head{display:flex;align-items:center;justify-content:space-between;
+    margin:14px 0 4px;min-height:24px}
+  .wl-counter{font-size:.88rem;color:var(--muted)}
+  .wl-check{width:16px;height:16px;cursor:pointer;flex:none;
+    accent-color:var(--accent);margin-top:2px}
+  .item.resolved{opacity:.38}
+  .item.resolved .what{text-decoration:line-through}
+  .item.resolved .badge{display:none}
+
+  /* done / completion panel */
+  .done-panel{background:#e2f2ea;border:1px solid #b6ddc6;color:#1a5c38;
+    padding:28px 20px;border-radius:10px;text-align:center;
+    font-size:1.05rem;margin-top:14px}
+  .done-icon{font-size:2rem;display:block;margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -216,7 +239,7 @@ function parseICS(text, calname){
       events.push(ev);
     }
   }
-  // capture header (everything before first VEVENT) for re-export
+  // capture header for re-export
   const head = text.includes('BEGIN:VEVENT') ? text.split('BEGIN:VEVENT')[0]
             : "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Hum//EN\n";
   return {events, head, foot:"END:VCALENDAR\n"};
@@ -253,14 +276,14 @@ function fmtEv(ev){
 const jsDay = dt => (dt.getDay()===0?6:dt.getDay()-1); // Mon=0
 
 /* ── state ─────────────────────────────────────────────────────────────── */
-let CALS = {};   // name -> {events, head, foot}
-let SELECTED = null;   // name of calendar chosen for single-calendar functions
-const SINGLE_FNS = new Set(['clean','archive']);   // functions that act on one calendar
+let CALS = {};
+let SELECTED = null;
+const SINGLE_FNS = new Set(['clean','archive']);
 function allEvents(){ return Object.values(CALS).flatMap(c=>c.events); }
 
-/* per-calendar color index — assigned in load order, stable while loaded */
+/* per-calendar color index */
 const CAL_PALETTE = ['#2f8f87','#b5612f','#6b4a9b','#2f8f5f','#b23a48','#3a6ea5','#9b7a1f','#c0588a'];
-const CAL_COLOR = {};   // name -> hex
+const CAL_COLOR = {};
 function assignColors(){
   let i=0;
   for(const n of calNames()){ if(!CAL_COLOR[n]) CAL_COLOR[n]=CAL_PALETTE[i%CAL_PALETTE.length]; i++; }
@@ -269,6 +292,44 @@ function colorOf(n){ return CAL_COLOR[n] || 'var(--muted)'; }
 function dot(n){ return `<span class="cdot" style="background:${colorOf(n)}"></span>`; }
 function srcTag(n){ return `<span class="csrc" style="background:${colorOf(n)}1a">${dot(n)}${n}</span>`; }
 function calNames(){ return Object.keys(CALS); }
+
+/* ── worklist helpers ───────────────────────────────────────────────────── */
+function staleBanner(n){
+  if(!n) return '';
+  return `<div class="hide-banner" id="hidebanner">Hiding ${n} past event${n===1?'':'s'} that would skew this — review them in
+    <a href="#" onclick="event.preventDefault();goToTab('archive')">Clear clutter →</a>
+    <button class="hb-x" onclick="document.getElementById('hidebanner').remove()" aria-label="dismiss">×</button></div>`;
+}
+
+function goToTab(fn){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  const t=document.querySelector(`.tab[data-fn="${fn}"]`);
+  if(t){t.classList.add('active'); activeFn=fn;}
+  renderChips(); updatePickHint(); RENDER[fn]();
+}
+
+function attachWorklist(listId, replacePanelOnDone){
+  const list=document.getElementById(listId);
+  if(!list) return;
+  const items=list.querySelectorAll('.wl-item');
+  if(!items.length) return;
+  const total=items.length;
+  let resolved=0;
+  const counter=document.getElementById('wl-counter');
+  if(counter) counter.textContent=`0 of ${total} resolved`;
+  items.forEach(item=>{
+    const cb=item.querySelector('.wl-check');
+    if(!cb) return;
+    cb.addEventListener('change',e=>{
+      resolved+=e.target.checked?1:-1;
+      item.classList.toggle('resolved',e.target.checked);
+      if(counter) counter.textContent=`${resolved} of ${total} resolved`;
+      if(replacePanelOnDone && resolved===total)
+        document.getElementById('panel').innerHTML=
+          `<div class="done-panel"><span class="done-icon">✓</span>All clear — nothing left to review.</div>`;
+    });
+  });
+}
 
 /* ── 1. COMBINED conflicts (blocking vs marker, cross-calendar) ────────── */
 function weeklySlots(ev){
@@ -304,20 +365,23 @@ function findConflicts(events){
 }
 function renderCombined(){
   const events=allEvents();
+  const staleCount=events.filter(e=>!isMarker(e)&&!isActive(e)).length;
   const {conflicts,blocking}=findConflicts(events);
   const markers=events.filter(isMarker);
-  const stale=events.filter(e=>!isActive(e));
   const cross=conflicts.filter(c=>c[0].cal!==c[1].cal);
   const same=conflicts.filter(c=>c[0].cal===c[1].cal);
   let h=`<p class="desc">Your whole schedule, all calendars pooled together. Only real time-vs-time clashes are shown — birthdays and all-day markers are excluded so they can't bury the signal.</p>`;
+  h+=staleBanner(staleCount);
   h+=`<div class="result">Calendars: ${calNames().join(', ')||'—'}
 Time-blocking commitments checked: ${blocking.length}
-Markers excluded (birthdays/all-day): ${markers.length}
-Stale (ended/past) skipped: ${stale.length}</div>`;
+Markers excluded (birthdays/all-day): ${markers.length}</div>`;
   if(conflicts.length===0){
-    h+=`<div class="ok-banner" style="margin-top:14px">✓ No time conflicts across your combined schedule. Everything fits.</div>`;
+    h+=`<div class="done-panel" style="margin-top:14px"><span class="done-icon">✓</span>No time conflicts across your combined schedule. Everything fits.</div>`;
     setPanel(h); return;
   }
+  const total=conflicts.length;
+  h+=`<div class="wl-head"><span>Conflicts to review</span><span class="wl-counter" id="wl-counter">0 of ${total} resolved</span></div>`;
+  h+=`<div id="wl-items">`;
   if(cross.length){
     h+=`<h3 class="rt">Across calendars <span class="badge cross">a single-calendar check would miss these</span></h3>`;
     for(const [a,b,when] of cross) h+=conflItem(a,b,when,true);
@@ -326,10 +390,13 @@ Stale (ended/past) skipped: ${stale.length}</div>`;
     h+=`<h3 class="rt">Within one calendar</h3>`;
     for(const [a,b,when] of same) h+=conflItem(a,b,when,false);
   }
+  h+=`</div>`;
   setPanel(h);
+  attachWorklist('wl-items', true);
 }
 function conflItem(a,b,when,cross){
-  return `<div class="item"><div class="what"><strong>${when}</strong>
+  return `<div class="item wl-item"><input type="checkbox" class="wl-check" aria-label="mark resolved">
+    <div class="what"><strong>${when}</strong>
     <div class="meta" style="margin-top:3px">${fmtEv(a)} &nbsp;${srcTag(a.cal)}</div>
     <div class="meta" style="margin-top:3px">${fmtEv(b)} &nbsp;${srcTag(b.cal)}</div></div>
     <span class="badge ${cross?'cross':'warn'}">${cross?'cross-calendar':'overlap'}</span></div>`;
@@ -345,7 +412,6 @@ function findDuplicates(events){
   const map={};
   for(const ev of events){ (map[exactKey(ev)] ||= []).push(ev); }
   const exact=Object.values(map).filter(g=>g.length>1);
-  // probable: same date+time, titles share >=50% words
   const singles=Object.values(map).map(g=>g[0]);
   const byTime={};
   for(const ev of singles){
@@ -365,50 +431,69 @@ function findDuplicates(events){
   return {exact,probable};
 }
 function renderClean(){
-  const cal = currentCal();
+  const cal=currentCal();
   if(!cal){ setPanel(`<p class="empty">Select a calendar above to clean.</p>`); return; }
-  const calName = SELECTED;
-  const {exact,probable}=findDuplicates(cal.events);
+  const calName=SELECTED;
+  const activeEvs=cal.events.filter(e=>isActive(e));
+  const staleCount=cal.events.length-activeEvs.length;
+  const {exact,probable}=findDuplicates(activeEvs);
   const nExtra=exact.reduce((s,g)=>s+g.length-1,0);
   let h=`<p class="desc">Exact duplicates are collapsed automatically (the first copy is kept). Probable duplicates — same time, near-identical title — are shown for you to confirm. Nothing is removed until you download the cleaned file.</p>`;
+  h+=staleBanner(staleCount);
   if(!exact.length && !probable.length){
-    h+=`<div class="ok-banner">✓ No duplicates found in ${calNames()[0]}.</div>`; setPanel(h); return;
+    h+=`<div class="done-panel"><span class="done-icon">✓</span>No duplicates found in ${calName}.</div>`;
+    setPanel(h); return;
   }
+  const total=exact.length+probable.length;
+  h+=`<div class="wl-head"><span>Items to review</span><span class="wl-counter" id="wl-counter">0 of ${total} reviewed</span></div>`;
+  h+=`<div id="wl-items">`;
   if(exact.length){
     h+=`<h3 class="rt">Exact duplicates — ${nExtra} extra copies</h3>`;
-    for(const g of exact) h+=`<div class="item"><div class="what">${g.length}× &nbsp;${fmtEv(g[0])}</div><span class="badge warn">auto-collapse</span></div>`;
+    for(const g of exact)
+      h+=`<div class="item wl-item"><input type="checkbox" class="wl-check" aria-label="acknowledge">
+        <div class="what">${g.length}× &nbsp;${fmtEv(g[0])}</div>
+        <span class="badge warn">auto-collapse</span></div>`;
   }
   if(probable.length){
     h+=`<h3 class="rt">Probable duplicates — your call</h3>`;
     probable.forEach(([a,b,ov],i)=>{
-      h+=`<div class="item" id="prob${i}"><div class="what">~${Math.round(ov*100)}% same time
-        <div class="meta">${fmtEv(a)}</div><div class="meta">${fmtEv(b)}</div></div>
-        <label class="opt"><input type="checkbox" class="probchk" data-i="${i}"> drop 2nd</label></div>`;
+      h+=`<div class="item wl-item" id="prob${i}">
+        <input type="checkbox" class="wl-check probchk" data-i="${i}" aria-label="drop 2nd and mark reviewed">
+        <div class="what">~${Math.round(ov*100)}% same time
+          <div class="meta">${fmtEv(a)}</div><div class="meta">${fmtEv(b)}</div></div>
+        <span class="badge warn">drop 2nd?</span></div>`;
     });
   }
+  h+=`</div>`;
   h+=`<div class="controls" style="margin-top:16px"><button class="run" id="cleanDl">Download cleaned calendar</button></div>
-      <p class="note">Saves to a new file. Your original is never changed. Exact duplicates are removed; probable ones only if you ticked them.</p>`;
+      <p class="note">Saves to a new file. Your original is never changed. Exact duplicates are removed; probable ones only if ticked.</p>`;
   setPanel(h);
+  attachWorklist('wl-items', false);
   document.getElementById('cleanDl').onclick=()=>{
     const drop=new Set();
     for(const g of exact) g.slice(1).forEach(e=>drop.add(e));
     document.querySelectorAll('.probchk:checked').forEach(c=>drop.add(probable[+c.dataset.i][1]));
     const keep=cal.events.filter(e=>!drop.has(e));
     downloadCal(calName+'_cleaned.ics', cal, keep);
+    setPanel(`<div class="done-panel"><span class="done-icon">✓</span>Cleaned calendar downloaded — original unchanged.<br>
+      <span style="font-size:.9rem;opacity:.7">Import <b>${calName}_cleaned.ics</b> to use your cleaned calendar.</span></div>`);
   };
 }
 
 /* ── 3. ARCHIVE stale ──────────────────────────────────────────────────── */
 function renderArchive(){
-  const cal = currentCal();
+  const cal=currentCal();
   if(!cal){ setPanel(`<p class="empty">Select a calendar above to clear clutter from.</p>`); return; }
   let h=`<p class="desc">Stale = past one-off events and recurring series that have ended (last semester's classes, old appointments). Ongoing events — yearly birthdays, active weekly commitments — are never touched. Removed events are saved to a separate archive file you can re-import anytime.</p>`;
   h+=`<div class="controls"><label class="opt">Only events before <input type="date" id="beforeDate"></label>
       <button class="ghost" id="rescan">Rescan</button></div>`;
-  const before = (()=>{const v=document.getElementById('beforeDate'); return v&&v.value?new Date(v.value):null;})();
+  const before=(()=>{const v=document.getElementById('beforeDate'); return v&&v.value?new Date(v.value):null;})();
   const stale=cal.events.filter(e=>isStale(e,before)).sort((a,b)=>a.dt-b.dt);
   const keep=cal.events.filter(e=>!isStale(e,before));
-  if(!stale.length){ h+=`<div class="ok-banner">✓ Nothing stale. Your calendar is already lean.</div>`; setPanel(h); attachArchive(cal); return; }
+  if(!stale.length){
+    h+=`<div class="done-panel"><span class="done-icon">✓</span>Nothing stale. Your calendar is already lean.</div>`;
+    setPanel(h); attachArchive(cal); return;
+  }
   h+=`<div class="result">${stale.length} stale · ${keep.length} keeping</div>`;
   h+=`<div class="controls" style="margin-top:12px">
       <button class="danger" id="nuke">Archive all ${stale.length}</button>
@@ -429,7 +514,8 @@ function attachArchive(cal,stale,keep){
   if(nuke) nuke.onclick=()=>{
     downloadCal(name()+'_archive.ics', cal, stale);
     downloadCal(name()+'_current.ics', cal, keep);
-    setPanel(`<div class="ok-banner">✓ Archived ${stale.length} events and saved your cleaned calendar.<br>Two files downloaded: <b>_archive.ics</b> (everything removed, re-importable) and <b>_current.ics</b> (your lean calendar). Your original is unchanged.</div><p class="note">To use the lean version: import _current.ics into a fresh calendar, or clear the old calendar's events and import it.</p>`);
+    setPanel(`<div class="done-panel"><span class="done-icon">✓</span>Archived ${stale.length} events and saved your cleaned calendar.<br>
+      <span style="font-size:.9rem;opacity:.7">Two files downloaded: <b>_archive.ics</b> (re-importable) and <b>_current.ics</b> (your lean calendar). Original unchanged.</span></div>`);
   };
   const pm=document.getElementById('pickmode');
   if(pm) pm.onclick=()=>{
@@ -442,7 +528,8 @@ function attachArchive(cal,stale,keep){
       const keep2=cal.events.filter(e=>!pickedSet.has(e));
       downloadCal(name()+'_archive.ics', cal, picked);
       downloadCal(name()+'_current.ics', cal, keep2);
-      setPanel(`<div class="ok-banner">✓ Archived ${picked.length} selected events.<br>Downloaded <b>_archive.ics</b> and <b>_current.ics</b>. Original unchanged.</div>`);
+      setPanel(`<div class="done-panel"><span class="done-icon">✓</span>Archived ${picked.length} selected events.<br>
+        <span style="font-size:.9rem;opacity:.7">Downloaded <b>_archive.ics</b> and <b>_current.ics</b>. Original unchanged.</span></div>`);
     };
   };
   function name(){ return SELECTED.replace(/\.ics$/,''); }
@@ -453,11 +540,9 @@ function fuzzySame(a,b){
   if(a.allday!==b.allday) return false;
   if(normSummary(a.summary)!==normSummary(b.summary)) return false;
   if(a.allday) return a.dt.toDateString()===b.dt.toDateString();
-  return Math.abs(a.dt-b.dt)<=600000; // 10 min
+  return Math.abs(a.dt-b.dt)<=600000;
 }
 function reconcileKey(ev){
-  // identity for "the same commitment": title + recurrence signature (so a
-  // weekly class is ONE thing), or title+datetime for one-offs.
   const t=normSummary(ev.summary);
   if(ev.rrule){
     const days=(ev.byday||[]).slice().sort().join('');
@@ -471,11 +556,9 @@ function renderReconcile(){
     setPanel(`<p class="desc">Reconcile checks whether the same events appear on two or more calendars that are meant to mirror each other (e.g. your work account on your phone and your laptop). Load at least two calendars to compare them.</p><p class="empty">Loaded: ${names.join(', ')||'none'}</p>`);
     return;
   }
-  // collapse by commitment key: each distinct commitment listed once, with the
-  // set of calendars it appears on. Recurring series and in-calendar duplicates
-  // fold into a single entry.
-  const map=new Map();   // key -> {ev, in:Set}
-  for(const n of names) for(const ev of CALS[n].events){
+  const totalStale=names.reduce((s,n)=>s+CALS[n].events.filter(e=>!isActive(e)).length,0);
+  const map=new Map();
+  for(const n of names) for(const ev of CALS[n].events.filter(e=>isActive(e))){
     const k=reconcileKey(ev);
     if(map.has(k)) map.get(k).in.add(n);
     else map.set(k,{ev, in:new Set([n])});
@@ -484,19 +567,27 @@ function renderReconcile(){
   const all=new Set(names);
   const missing=unified.filter(u=>u.in.size!==all.size);
   let h=`<p class="desc">Distinct commitments present on some calendars but missing from others. Recurring events are listed once, not per occurrence. An event you only ever wanted on one calendar showing here is normal — Hum shows you everything and lets you decide.</p>`;
+  h+=staleBanner(totalStale);
   h+=`<div class="result">`+names.map(n=>`${dot(n)} ${n}: ${unified.filter(u=>u.in.has(n)).length} distinct commitments`).join('\n')+`</div>`;
-  if(!missing.length){ h+=`<div class="ok-banner" style="margin-top:14px">✓ Every commitment appears on all calendars. They agree.</div>`; setPanel(h); return; }
-  h+=`<h3 class="rt">${missing.length} commitment(s) not on every calendar</h3>`;
+  if(!missing.length){
+    h+=`<div class="done-panel" style="margin-top:14px"><span class="done-icon">✓</span>Every commitment appears on all calendars. They agree.</div>`;
+    setPanel(h); return;
+  }
+  h+=`<div class="wl-head"><span>${missing.length} to review</span><span class="wl-counter" id="wl-counter">0 of ${missing.length} resolved</span></div>`;
+  h+=`<div id="wl-items">`;
   missing.sort((a,b)=>a.ev.dt-b.ev.dt);
   for(const u of missing){
     const off=[...all].filter(n=>!u.in.has(n));
     const onTags=[...u.in].map(srcTag).join(' ');
     const offTags=off.map(srcTag).join(' ');
-    h+=`<div class="item"><div class="what">${fmtEv(u.ev)}
+    h+=`<div class="item wl-item"><input type="checkbox" class="wl-check" aria-label="mark resolved">
+      <div class="what">${fmtEv(u.ev)}
       <div class="meta" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px">
         on: ${onTags} &nbsp;·&nbsp; missing from: ${offTags}</div></div></div>`;
   }
+  h+=`</div>`;
   setPanel(h);
+  attachWorklist('wl-items', true);
 }
 
 /* ── 5. COHERENCE (oscillator-settling lineage) ────────────────────────── */
@@ -579,7 +670,6 @@ const RENDER={combined:renderCombined,clean:renderClean,archive:renderArchive,
 let activeFn='combined';
 function setPanel(html){ document.getElementById('panel').innerHTML=html; }
 function currentCal(){
-  // for single-calendar functions: the selected one, or the only one if just one loaded
   if(SELECTED && CALS[SELECTED]) return CALS[SELECTED];
   if(calNames().length===1){ SELECTED=calNames()[0]; return CALS[SELECTED]; }
   return null;
@@ -597,7 +687,7 @@ function refresh(){
 function updatePickHint(){
   const hint=document.getElementById('pickhint');
   if(SINGLE_FNS.has(activeFn) && calNames().length>1){
-    hint.textContent = SELECTED ? `Working on “${SELECTED}”. Tap another calendar above to switch.`
+    hint.textContent = SELECTED ? `Working on "${SELECTED}". Tap another calendar above to switch.`
                                 : 'This works on one calendar — tap one above to choose.';
   } else hint.textContent='';
 }
@@ -610,12 +700,10 @@ function renderChips(){
       <span class="name">${sel?'':dot(n)}${n} · ${CALS[n].events.length}</span>
       <button data-rm="${n}" title="remove">×</button></span>`;
   }).join('');
-  // remove buttons
   box.querySelectorAll('button[data-rm]').forEach(b=>b.onclick=(e)=>{
     e.stopPropagation();
     const n=b.dataset.rm; delete CALS[n]; if(SELECTED===n) SELECTED=null; refresh();
   });
-  // selecting a chip (only when a single-cal function is active)
   if(selectable){
     box.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
       SELECTED=c.dataset.n; renderChips(); updatePickHint(); RENDER[activeFn]();
