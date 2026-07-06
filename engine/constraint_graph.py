@@ -16,12 +16,13 @@ from typing import Optional
 
 @dataclass
 class SolverResult:
-    partition:    np.ndarray          # {+1, -1}^n: which partition each vertex belongs to
-    cut_value:    float               # total satisfied constraint weight
-    vortex_count: int                 # topological frustration at mid-anneal
-    tension_map:  list                # [(label_lo, label_hi, tension)] windowed
-    runtime:      float               # seconds
-    labels:       Optional[list]      # vertex labels from the ConstraintGraph
+    partition:    np.ndarray             # {+1, -1}^n discrete readout (MAX-CUT solvers)
+    cut_value:    float                  # total satisfied constraint weight, or -energy
+    vortex_count: int                    # topological frustration at mid-anneal
+    tension_map:  list                   # [(label_lo, label_hi, tension)] windowed
+    runtime:      float                  # seconds
+    labels:       Optional[list]         # vertex labels from the ConstraintGraph
+    phases:       Optional[np.ndarray] = None   # continuous θ ∈ (−π, π] (dihedral solvers)
 
 
 class ConstraintGraph:
