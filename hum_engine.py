@@ -1,23 +1,26 @@
 """
-Hum — recurring-structure coherence engine  v0.1
+Hum — recurring-structure coherence engine  v0.2
 ════════════════════════════════════════════════════════════════════════════
 Point it at one or more .ics calendar files. It:
   1. parses events (zero dependencies — minimal RFC-5545 reader)
   2. keeps only RECURRING commitments (the skeleton; one-offs are ignored)
   3. normalizes each to a phase on its natural cycle (weekly / daily)
   4. builds couplings (overlap = repulsion, adjacency-without-buffer = strain)
-  5. settles the phase field (the validated oscillator solver, sin coupling)
-  6. reports a coherence score R̄ and a ranked TENSION MAP
+  5. delegates arrangement solving to engine/WindingSolver (MAX-CUT partition
+     + vortex-count difficulty indicator)
+  6. reports a coherence score R̄, a ranked TENSION MAP, and — when conflicts
+     are 2-colourable — the suggested Slot A / Slot B split.
 
 The test this is built FOR: does the tension map surface conflicts you did
 NOT already know about? If yes, it reduces real cognitive friction. If it only
 echoes what you can already see, it's a toy. Run it on your own calendar and
 judge honestly.
 
-Engine split honored: this file is the DETERMINISTIC core + the COHERENCE
-solver. No language model, no field LM, nothing probabilistic about times.
-The solver is used only to score/rank structural tension — never to move a
-meeting on its own.
+Split (v0.2): this file is the DETERMINISTIC core (parse/couple) + the R̄
+readout + the REPORT. The arrangement solver lives in engine/ and is domain-
+agnostic — the same solver is used by engine/adapters/genetics.py.
+The solver is used only to score/rank structural tension and suggest a two-
+slot split — never to move a meeting on its own.
 
 Usage:
     python hum_engine.py mycal.ics
@@ -29,6 +32,9 @@ import sys
 import re
 import math
 from datetime import datetime
+import numpy as np
+from engine.solver import WindingSolver
+from engine.constraint_graph import ConstraintGraph
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Minimal .ics reader  (handles the common subset: VEVENT, DTSTART/DTEND,
@@ -233,15 +239,13 @@ def circles_overlap(s1, e1, s2, e2, total):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. The coherence solver (validated oscillator-settling lineage).
-#    Phases evolve under repulsive coupling; we read:
-#      R̄  = order parameter of the RESIDUAL frustration (how much tension
-#            the structure can't resolve) → mapped to a 0..1 coherence score
-#      per-commitment residual force = how stuck each commitment is
-#    NOTE: we do NOT move real meetings. The solver measures whether the
-#    coupling graph is satisfiable and where it strains. Phases are free to
-#    relax in simulation to reveal structural tension; the real calendar is
-#    untouched.
+# 4. Readouts.  Two distinct signals:
+#      R̄               → coherence score from ACTUAL current strain (Hum-native)
+#      engine result    → MAX-CUT partition + vortex-count difficulty indicator
+#                          (delegated to engine/WindingSolver)
+#    NOTE: we do NOT move real meetings. The engine measures whether the
+#    conflict graph is 2-colourable and which commitments belong on which
+#    side; the real calendar is untouched.
 # ─────────────────────────────────────────────────────────────────────────────
 def _strain_at(commits, W):
     """Total coupling strain at ACTUAL positions, and per-commitment strain.
@@ -261,52 +265,41 @@ def _strain_at(commits, W):
     return total, per
 
 
-def coherence(commits, W, edges, steps=1500, dt=0.05, seed=0):
+def coherence(commits, W, edges, steps=1500, restarts=8, seed=0):
     """
-    Two distinct readouts:
-      R̄ (coherence) = tension in the ACTUAL recurring schedule, mapped to
-                       0..1. Driven by real overlaps/tight gaps, NOT by
-                       whether a hypothetical rearrangement exists.
-      satisfiable    = does a conflict-free arrangement exist at all? Phases
-                       relax under repulsion; if residual strain can reach ~0
-                       the schedule is satisfiable, otherwise OVERCOMMITTED.
+    Analyze the recurring schedule.
+
+      R̄ (coherence)  — 0..1 score of tension in the ACTUAL schedule as it is
+                        now (real overlaps/tight gaps).
+      ranked strain   — per-commitment coupling load, most-frustrated first.
+      engine result   — SolverResult from WindingSolver: partition {±1}^n
+                        (slot A / slot B), vortex count (0 ⇒ 2 slots suffice;
+                        >0 ⇒ frustrated cycles require >2 slots or drops),
+                        cut value, runtime.
     """
     n = len(commits)
     if n == 0:
-        return 1.0, [], True
+        return 1.0, [], None
 
-    # ── 1. coherence from ACTUAL strain (fixes the R̄=1-with-collisions bug)
+    # ── 1. coherence from ACTUAL strain
     total_strain, per = _strain_at(commits, W)
     R = math.exp(-total_strain / max(n, 1))    # more real conflict → lower R̄
-
-    # ── 2. satisfiability probe: can repulsion resolve everything?
-    th = [c['phase'] for c in commits]
-    for step in range(steps):
-        damp = 1.0 - step / steps
-        newth = th[:]
-        for i in range(n):
-            f = 0.0
-            for j in range(n):
-                if W[i][j] != 0.0:
-                    f += W[i][j] * math.sin(th[i] - th[j])
-            newth[i] = (th[i] + dt * f * damp) % (2 * math.pi)
-        th = newth
-    # measure residual collisions after relaxation by re-deriving windows
-    # from relaxed phases on the same cycle
-    relaxed_conflicts = 0
-    for (i, j, kind, detail, gap) in edges:
-        if commits[i]['cycle'] != commits[j]['cycle']:
-            continue
-        total = cycle_hours(commits[i]['cycle'])
-        sh_i = (th[i] / (2 * math.pi)) * total
-        sh_j = (th[j] / (2 * math.pi)) * total
-        if circles_overlap(sh_i, sh_i + commits[i]['span_hours'],
-                           sh_j, sh_j + commits[j]['span_hours'], total):
-            relaxed_conflicts += 1
-    satisfiable = (relaxed_conflicts == 0)
-
     ranked = sorted(range(n), key=lambda i: -per[i])
-    return R, [(i, per[i]) for i in ranked if per[i] > 0], satisfiable
+    ranked_strain = [(i, per[i]) for i in ranked if per[i] > 0]
+
+    # ── 2. arrangement solving → engine
+    if not edges:
+        return R, ranked_strain, None
+
+    graph = ConstraintGraph(
+        W        = np.array(W),
+        labels   = [c['summary'] for c in commits],
+        metadata = {"domain": "calendar",
+                    "cycles": [c['cycle'] for c in commits]},
+    )
+    solver = WindingSolver(steps=steps, restarts=restarts, seed=seed)
+    result = solver.solve(graph)
+    return R, ranked_strain, result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,7 +318,7 @@ def fmt(c):
     return f"daily {h:02d}:{m:02d} · {c['summary']}"
 
 
-def report(commits, W, edges, R, ranked, satisfiable):
+def report(commits, W, edges, R, ranked, result):
     print("=" * 68)
     print("  HUM — recurring-structure coherence")
     print("=" * 68)
@@ -338,12 +331,13 @@ def report(commits, W, edges, R, ranked, satisfiable):
     else:
         print("(structurally overcommitted)")
 
-    if edges and not satisfiable:
-        print("  ⚑ OVERCOMMITTED: no conflict-free arrangement of these")
-        print("    recurring commitments exists — something must give.")
-    elif edges and satisfiable:
-        print("  ✓ Resolvable: a conflict-free arrangement DOES exist —")
-        print("    these collisions are fixable by moving commitments.")
+    if edges and result is not None:
+        if result.vortex_count == 0:
+            print("  ✓ Resolvable in 2 slots: the conflict graph is bipartite;")
+            print("    the Slot A / Slot B split below eliminates every collision.")
+        else:
+            print(f"  ⚑ {result.vortex_count} frustrated cycle(s): no 2-slot")
+            print("    arrangement is conflict-free — needs >2 slots or drops.")
 
     if not edges:
         print("\n  No structural tensions found among recurring commitments.")
@@ -364,6 +358,19 @@ def report(commits, W, edges, R, ranked, satisfiable):
         print("  Most-frustrated commitments (most coupled to others):")
         for i, r in ranked[:5]:
             print(f"      [{r:4.2f}]  {fmt(commits[i])}")
+
+    if result is not None:
+        slot_a = [i for i, s in enumerate(result.partition) if s > 0]
+        slot_b = [i for i, s in enumerate(result.partition) if s < 0]
+        print(f"\n  SUGGESTED SPLIT  "
+              f"(engine partition, cut={result.cut_value:.1f}):\n")
+        print(f"    Slot A  ({len(slot_a)}):")
+        for i in slot_a:
+            print(f"      {fmt(commits[i])}")
+        print(f"    Slot B  ({len(slot_b)}):")
+        for i in slot_b:
+            print(f"      {fmt(commits[i])}")
+
     print("\n  (Collisions you already knew about = expected. The real")
     print("   test is whether any above are ones you HADN'T noticed.)")
 
@@ -433,8 +440,8 @@ def main():
                 events += parse_ics(f.read())
     commits = to_commitments(events)
     W, edges = build_couplings(commits)
-    R, ranked, satisfiable = coherence(commits, W, edges)
-    report(commits, W, edges, R, ranked, satisfiable)
+    R, ranked, result = coherence(commits, W, edges)
+    report(commits, W, edges, R, ranked, result)
 
 
 if __name__ == "__main__":
