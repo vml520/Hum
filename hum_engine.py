@@ -105,6 +105,7 @@ def parse_rrule(rrule):
 #    Daily commitments  → phase on the 24-hour day.
 # ─────────────────────────────────────────────────────────────────────────────
 DAYMAP = {'MO': 0, 'TU': 1, 'WE': 2, 'TH': 3, 'FR': 4, 'SA': 5, 'SU': 6}
+WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 
 def to_commitments(events):
@@ -184,33 +185,54 @@ def build_couplings(commits):
     for i in range(n):
         for j in range(i + 1, n):
             ci, cj = commits[i], commits[j]
-            if ci['cycle'] != cj['cycle']:
-                continue
-            total = cycle_hours(ci['cycle'])
-            si, ei = window(ci)
-            sj, ej = window(cj)
-            # overlap test on the circle: do [si,ei) and [sj,ej) intersect?
-            gap_ij = circ_gap(ei, sj, total)   # i then j
-            gap_ji = circ_gap(ej, si, total)   # j then i
-            ov = circles_overlap(si, ei, sj, ej, total)
-            min_gap = min(gap_ij, gap_ji)
-            if ov:
-                w = 1.0
-                # bi-weekly that alternate may not actually collide
-                if ci['interval'] != cj['interval'] or ci['interval'] > 1:
-                    detail = "overlap (check alternation — different cadence)"
-                    w = 0.6
-                else:
-                    detail = "direct overlap"
-                W[i][j] = W[j][i] = w
-                edges.append((i, j, 'overlap', detail, min_gap))
-            elif min_gap < BUFFER_HOURS:
-                w = 0.4
-                W[i][j] = W[j][i] = w
-                edges.append((
-                    i, j, 'tight',
-                    f"only {min_gap * 60:.0f} min between them", min_gap
-                ))
+            if ci['cycle'] == cj['cycle']:
+                total = cycle_hours(ci['cycle'])
+                si, ei = window(ci)
+                sj, ej = window(cj)
+                # overlap test on the circle: do [si,ei) and [sj,ej) intersect?
+                gap_ij = circ_gap(ei, sj, total)   # i then j
+                gap_ji = circ_gap(ej, si, total)   # j then i
+                ov = circles_overlap(si, ei, sj, ej, total)
+                min_gap = min(gap_ij, gap_ji)
+                if ov:
+                    w = 1.0
+                    # bi-weekly that alternate may not actually collide
+                    if ci['interval'] != cj['interval'] or ci['interval'] > 1:
+                        detail = "overlap (check alternation — different cadence)"
+                        w = 0.6
+                    else:
+                        detail = "direct overlap"
+                    W[i][j] = W[j][i] = w
+                    edges.append((i, j, 'overlap', detail, min_gap))
+                elif min_gap < BUFFER_HOURS:
+                    w = 0.4
+                    W[i][j] = W[j][i] = w
+                    edges.append((
+                        i, j, 'tight',
+                        f"only {min_gap * 60:.0f} min between them", min_gap
+                    ))
+            elif {ci['cycle'], cj['cycle']} == {'day', 'week'}:
+                # cross-cycle: a DAILY commitment recurs every day, so it lands
+                # on the weekly commitment's weekday too. Compare their
+                # time-of-day windows on the 24-hour circle. (Previously these
+                # pairs were skipped — a whole class of buried conflicts.)
+                weekly = ci if ci['cycle'] == 'week' else cj
+                sd = ci['hour']; ed = sd + ci['span_hours']
+                se = cj['hour']; ee = se + cj['span_hours']
+                ov = circles_overlap(sd, ed, se, ee, 24.0)
+                min_gap = min(circ_gap(ed % 24, se % 24, 24.0),
+                              circ_gap(ee % 24, sd % 24, 24.0))
+                wd = WEEKDAYS[weekly['weekday']]
+                if ov:
+                    W[i][j] = W[j][i] = 1.0
+                    edges.append((i, j, 'overlap',
+                                  f"daily commitment lands on the {wd} slot",
+                                  min_gap))
+                elif min_gap < BUFFER_HOURS:
+                    W[i][j] = W[j][i] = 0.4
+                    edges.append((i, j, 'tight',
+                                  f"only {min_gap * 60:.0f} min around the {wd} slot",
+                                  min_gap))
     return W, edges
 
 
@@ -295,14 +317,20 @@ def coherence(commits, W, edges, steps=1500, dt=0.05, seed=0):
     # from relaxed phases on the same cycle
     relaxed_conflicts = 0
     for (i, j, kind, detail, gap) in edges:
-        if commits[i]['cycle'] != commits[j]['cycle']:
-            continue
-        total = cycle_hours(commits[i]['cycle'])
-        sh_i = (th[i] / (2 * math.pi)) * total
-        sh_j = (th[j] / (2 * math.pi)) * total
-        if circles_overlap(sh_i, sh_i + commits[i]['span_hours'],
-                           sh_j, sh_j + commits[j]['span_hours'], total):
-            relaxed_conflicts += 1
+        ci, cj = commits[i], commits[j]
+        if ci['cycle'] == cj['cycle']:
+            total = cycle_hours(ci['cycle'])
+            sh_i = (th[i] / (2 * math.pi)) * total
+            sh_j = (th[j] / (2 * math.pi)) * total
+            if circles_overlap(sh_i, sh_i + ci['span_hours'],
+                               sh_j, sh_j + cj['span_hours'], total):
+                relaxed_conflicts += 1
+        else:  # cross-cycle day/week: compare time-of-day on the 24h circle
+            hi = ((th[i] / (2 * math.pi)) * cycle_hours(ci['cycle'])) % 24
+            hj = ((th[j] / (2 * math.pi)) * cycle_hours(cj['cycle'])) % 24
+            if circles_overlap(hi, hi + ci['span_hours'],
+                               hj, hj + cj['span_hours'], 24.0):
+                relaxed_conflicts += 1
     satisfiable = (relaxed_conflicts == 0)
 
     ranked = sorted(range(n), key=lambda i: -per[i])
@@ -413,6 +441,12 @@ SUMMARY:Morning focus block
 DTSTART:20260615T080000
 DTEND:20260615T083000
 RRULE:FREQ=DAILY
+END:VEVENT
+BEGIN:VEVENT
+SUMMARY:Ops review
+DTSTART:20260616T081500
+DTEND:20260616T084500
+RRULE:FREQ=WEEKLY;BYDAY=TU
 END:VEVENT
 END:VCALENDAR"""
 
