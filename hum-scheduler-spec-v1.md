@@ -32,11 +32,28 @@ plainly in the product itself.
    recurrence expansion, time-zone conversion, conflict detection, running
    counts. Plain, auditable arithmetic. Never probabilistic. If Coherence ever
    tells you a meeting is at 3:00, it is at 3:00.
-2. **The coherence engine (the validated TFT solver).** The phase-oscillator
-   settling dynamics — the one capability that survived benchmarking against
-   simulated annealing. Used *only* for what it is native to: measuring
-   structural tension in cyclic commitments and running "what-if" re-settling.
-   It never moves a meeting on its own; it scores and reveals.
+2. **The coherence engine (a phase-oscillator settling heuristic).** Used *only*
+   for what it is native to: measuring structural tension in cyclic commitments
+   and running "what-if" re-settling. It never moves a meeting on its own; it
+   scores and reveals.
+
+   > **Correction (15 August 2026).** This item previously described the engine as
+   > "the validated TFT solver … the one capability that survived benchmarking
+   > against simulated annealing." **Measurement does not support that, and the
+   > claim is withdrawn.** A controlled comparison — identical hyperplane rounding
+   > and 1-opt polish in both arms, phase settling switched on versus off — found
+   > the settling contributes **−0.19% over 72 paired runs (Wilcoxon p = 0.42,
+   > 28 wins / 37 losses)**: no detectable contribution, with the classical
+   > post-processing doing the work. A second study in a different domain found
+   > coupled elements gave no advantage over independent ones. The same withdrawal
+   > was published in the TeoriaTeotl repository on 13 August 2026.
+   >
+   > **What this does and does not change here.** It does not change the
+   > architecture: the engine was already confined to *scoring and revealing*,
+   > never to moving a meeting, and the deterministic core — which does all the
+   > arithmetic a user relies on — is untouched. What changes is the claim made
+   > for it. The engine is a **heuristic for surfacing structural tension**, not a
+   > benchmarked optimiser, and this spec should not imply otherwise.
 3. **TeotlAGI — not present at launch.** No field language model anywhere near
    scheduling decisions until it has passed a measured capability gate. When/if
    it earns a place, its only candidate role is natural-language input
@@ -85,12 +102,24 @@ should-separate, same-prep-block).
 The coherence engine maps this to its native form: each recurring commitment is
 a phase oscillator on the appropriate cycle; couplings are the solver's edge
 weights (repulsive for must-not-overlap, attractive for should-align). The field
-settles. Two readouts come directly out of the validated solver:
+settles. Two readouts come directly out of the settling engine:
 
 - **Coherence score R̄** — the order parameter, in [0,1]. High = the recurring
   structure is internally consistent and stable. Low = chronic structural
-  conflict. This is the same R̄ the MAX-CUT benchmark used; here it measures
-  schedule health.
+  conflict. This is the same R̄ the MAX-CUT work used; here it measures schedule
+  health.
+
+  > **Caveat, stated rather than buried (15 August 2026).** In the MAX-CUT
+  > setting, this order parameter was tested against solution quality and the
+  > correlation came out *negative* (ρ = −0.588): more coherence went with worse
+  > solutions. That test asked whether R̄ **predicts the quality of an answer** —
+  > a different question from the one asked here, where R̄ **is** the readout and
+  > is meant to describe how much frustration remains. So the result does not
+  > refute this usage. But the one place the order parameter was checked against
+  > an independent standard, it behaved unexpectedly, and R̄ should be read as a
+  > descriptive tension indicator rather than a validated measure of "health."
+  > Whether it tracks anything users recognise as schedule quality is exactly
+  > what the first release is meant to find out.
 - **Tension map** — per-commitment residual: which oscillators *won't* settle.
   A commitment that stays frustrated is a constraint that cannot be satisfied
   given the others. These are surfaced as named conflicts for human judgment —
@@ -174,7 +203,7 @@ visualization and full on-device operation possible.
    possible insurance.
 2. Deterministic core: calendar read (Google first), recurrence normalization,
    coupling extraction, conflict detection. Useful on its own.
-3. Coherence engine: adapt the validated solver (`maxcut_tft.py` lineage) to the
+3. Coherence engine: adapt the settling heuristic (`maxcut_tft.py` lineage) to the
    scheduling coupling model; R̄ readout; tension map.
 4. The dashboard + the zoomable cycle view + live what-if settling.
 5. Outlook/Graph provider; multi-zone alignment.

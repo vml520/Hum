@@ -6,7 +6,7 @@ Point it at one or more .ics calendar files. It:
   2. keeps only RECURRING commitments (the skeleton; one-offs are ignored)
   3. normalizes each to a phase on its natural cycle (weekly / daily)
   4. builds couplings (overlap = repulsion, adjacency-without-buffer = strain)
-  5. settles the phase field (the validated oscillator solver, sin coupling)
+  5. settles the phase field (phase-oscillator settling heuristic, sin coupling)
   6. reports a coherence score R̄ and a ranked TENSION MAP
 
 The test this is built FOR: does the tension map surface conflicts you did
@@ -15,7 +15,7 @@ echoes what you can already see, it's a toy. Run it on your own calendar and
 judge honestly.
 
 Engine split honored: this file is the DETERMINISTIC core + the COHERENCE
-solver. No language model, no field LM, nothing probabilistic about times.
+heuristic. No language model, no field LM, nothing probabilistic about times.
 The solver is used only to score/rank structural tension — never to move a
 meeting on its own.
 
@@ -255,7 +255,10 @@ def circles_overlap(s1, e1, s2, e2, total):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. The coherence solver (validated oscillator-settling lineage).
+# 4. The coherence engine (oscillator-settling heuristic; see the correction
+#    note in hum-scheduler-spec-v1.md -- the settling was measured to contribute
+#    -0.19% over classical post-processing, so this is a tension heuristic, not a
+#    benchmarked optimiser).
 #    Phases evolve under repulsive coupling; we read:
 #      R̄  = order parameter of the RESIDUAL frustration (how much tension
 #            the structure can't resolve) → mapped to a 0..1 coherence score
