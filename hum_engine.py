@@ -171,6 +171,33 @@ def window(c):
     return start, start + c['span_hours']
 
 
+# ---------------------------------------------------------------------------
+# Circular-arithmetic conventions
+#
+# The canonical reference for phase/circle conventions in this author's work is
+# `teotl_math.py` in the TeoriaTeotl repo (wrap_to_pi, wrap_theta, s1_gradient,
+# angular_distance, circular_mean). It exists so branch-cut handling lives in
+# one place.
+#
+# It is deliberately NOT imported here. Three reasons:
+#   1. teotl_math requires numpy. This file is stdlib-only (sys, re, math,
+#      datetime), and Hum's premise is "no installation" -- that matters more
+#      than sharing a helper.
+#   2. Units differ. teotl_math works in RADIANS on 2*pi. Hum works in HOURS on
+#      a cycle (total = 24 or 168). Every call site would need conversion.
+#   3. Semantics differ. circ_gap below is a FORWARD gap in [0, total).
+#      teotl_math.wrap_to_pi is SIGNED on +-pi; angular_distance is SYMMETRIC.
+#      They are not drop-in substitutes.
+#
+# Verified 2026-09-01: circ_gap and circles_overlap pass six wrap-around cases
+# (midnight-crossing gaps, interval spanning midnight with the other inside and
+# outside, touching-but-not-overlapping, whole-day span). No failures.
+#
+# If either side's conventions change, check them against each other -- that is
+# the only coupling between these two codebases, and it is by hand.
+# ---------------------------------------------------------------------------
+
+
 def circ_gap(a_end, b_start, total):
     """Forward gap from a_end to b_start on a circle of length total."""
     g = (b_start - a_end) % total
